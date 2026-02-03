@@ -1,0 +1,251 @@
+---
+title: Agent routing
+pcx_content_type: concept
+sidebar:
+  order: 3
+---
+
+import { TypeScriptExample } from "~/components";
+
+Learn how requests are routed to agents, how naming works, and patterns for organizing your agents.
+
+## How routing works
+
+When a request comes in, `routeAgentRequest()` examines the URL and routes it to the appropriate agent instance:
+
+```
+https://your-worker.dev/agents/{agent-name}/{instance-name}
+                              └─────┬─────┘ └─────┬──────┘
+                            Class name      Unique instance ID
+                            (kebab-case)
+```
+
+### Name resolution
+
+Agent class names are automatically converted to kebab-case for URLs:
+
+| Class Name    | URL Path                   |
+| ------------- | -------------------------- |
+| `Counter`     | `/agents/counter/...`      |
+| `MyAgent`     | `/agents/my-agent/...`     |
+| `ChatRoom`    | `/agents/chat-room/...`    |
+| `AIAssistant` | `/agents/ai-assistant/...` |
+
+## Instance naming patterns
+
+The instance name (the last part of the URL) determines which agent instance handles the request. Each unique name gets its own isolated agent with its own state.
+
+### Per-user agents
+
+Each user gets their own agent instance:
+
+<TypeScriptExample>
+
+```ts
+// Client
+const agent = useAgent({
+  agent: "UserProfile",
+  name: `user-${userId}` // "user-abc123"
+});
+```
+
+</TypeScriptExample>
+
+### Shared rooms
+
+Multiple users share the same agent instance:
+
+<TypeScriptExample>
+
+```ts
+// Client
+const agent = useAgent({
+  agent: "ChatRoom",
+  name: roomId // "general" or "room-42"
+});
+```
+
+</TypeScriptExample>
+
+### Global singleton
+
+A single instance for the entire application:
+
+<TypeScriptExample>
+
+```ts
+// Client
+const agent = useAgent({
+  agent: "AppConfig",
+  name: "default"
+});
+```
+
+</TypeScriptExample>
+
+## Custom URL routing
+
+For advanced use cases where you need control over the URL structure, you can bypass the default `/agents/{agent}/{name}` pattern.
+
+### Using basePath
+
+The `basePath` option lets clients connect to any URL path:
+
+<TypeScriptExample>
+
+```ts
+// Client connects to /user instead of /agents/user-agent/...
+const agent = useAgent({
+  agent: "UserAgent",
+  basePath: "user"
+});
+```
+
+</TypeScriptExample>
+
+### Server-side instance selection
+
+When using `basePath`, the server must handle routing:
+
+<TypeScriptExample>
+
+```ts
+export default {
+  async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+
+    // Custom routing - server determines instance from session
+    if (url.pathname === "/user") {
+      const session = await getSession(request);
+      const agent = await getAgentByName(env.UserAgent, session.userId);
+      return agent.fetch(request);
+    }
+
+    // Default routing for standard /agents/... paths
+    return (
+      routeAgentRequest(request, env) ||
+      new Response("Not found", { status: 404 })
+    );
+  }
+};
+```
+
+</TypeScriptExample>
+
+### Receiving the instance identity
+
+When using `basePath`, the client does not know which instance it connected to until the server tells it. The agent automatically sends its identity on connection:
+
+<TypeScriptExample>
+
+```ts
+const agent = useAgent({
+  agent: "UserAgent",
+  basePath: "user",
+  onIdentity: (name, agentType) => {
+    console.log(`Connected to ${agentType} instance: ${name}`);
+  }
+});
+
+// Reactive state - re-renders when identity is received
+return (
+  <div>
+    {agent.identified ? `Connected to: ${agent.name}` : "Connecting..."}
+  </div>
+);
+```
+
+</TypeScriptExample>
+
+### Handling identity changes on reconnect
+
+If the identity changes on reconnect (for example, session expired and user logs in as someone else), handle it with `onIdentityChange`:
+
+<TypeScriptExample>
+
+```ts
+const agent = useAgent({
+  agent: "UserAgent",
+  basePath: "user",
+  onIdentityChange: (oldName, newName, oldAgent, newAgent) => {
+    console.log(`Session changed: ${oldName} → ${newName}`);
+    // Refresh state, show notification, and so on
+  }
+});
+```
+
+</TypeScriptExample>
+
+### Sub-paths with path option
+
+Append additional path segments to the URL:
+
+<TypeScriptExample>
+
+```ts
+// With basePath: /user/settings
+useAgent({ agent: "UserAgent", basePath: "user", path: "settings" });
+
+// Standard routing: /agents/my-agent/room/settings
+useAgent({ agent: "MyAgent", name: "room", path: "settings" });
+```
+
+</TypeScriptExample>
+
+### Disabling identity for security
+
+If your instance names contain sensitive data (session IDs, internal user IDs), you can disable identity sending:
+
+<TypeScriptExample>
+
+```ts
+class SecureAgent extends Agent {
+  // Do not expose instance names to clients
+  static options = { sendIdentityOnConnect: false };
+}
+```
+
+</TypeScriptExample>
+
+When identity is disabled:
+- `agent.identified` stays `false`
+- `agent.ready` never resolves (use state updates instead)
+- `onIdentity` and `onIdentityChange` are never called
+
+## Multiple agents
+
+You can have multiple agent classes in one project. Each gets its own namespace:
+
+<TypeScriptExample>
+
+```ts
+// server.ts
+export { Counter } from "./agents/counter";
+export { ChatRoom } from "./agents/chat-room";
+export { UserProfile } from "./agents/user-profile";
+
+export default {
+  async fetch(request: Request, env: Env) {
+    return (
+      routeAgentRequest(request, env) ||
+      new Response("Not found", { status: 404 })
+    );
+  }
+};
+```
+
+</TypeScriptExample>
+
+Each agent is accessed via its own path:
+
+```
+/agents/counter/...
+/agents/chat-room/...
+/agents/user-profile/...
+```
+
+## Related resources
+
+- [Calling Agents](/agents/api-reference/calling-agents/) - Learn how to create and address agent instances
+- [WebSockets](/agents/api-reference/websockets/) - Real-time communication with agents
+- [Store and sync state](/agents/api-reference/store-and-sync-state/) - Managing agent state

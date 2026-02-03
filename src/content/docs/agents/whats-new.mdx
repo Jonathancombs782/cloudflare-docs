@@ -1,0 +1,218 @@
+---
+title: What's new
+pcx_content_type: concept
+sidebar:
+  order: 2
+---
+
+import { TypeScriptExample } from "~/components";
+
+Recent updates to the Agents SDK include new features for scheduling, routing, callable methods, and MCP integration.
+
+## Scheduling improvements
+
+### scheduleEvery() for fixed intervals
+
+Schedule tasks to run at fixed intervals with built-in overlap prevention and error resilience:
+
+<TypeScriptExample>
+
+```ts
+// Poll every 30 seconds
+await this.scheduleEvery(30, "poll", { source: "api" });
+
+// Health check every 45 seconds
+await this.scheduleEvery(45, "healthCheck", {});
+
+// Sync every 90 seconds (1.5 minutes)
+await this.scheduleEvery(90, "syncData", {});
+```
+
+</TypeScriptExample>
+
+Unlike cron schedules, `scheduleEvery()` supports:
+- Sub-minute precision (minimum 1 second)
+- Arbitrary intervals that do not fit cron patterns
+- Automatic overlap prevention (skips execution if previous call is still running)
+- Error resilience (continues even if a callback throws)
+
+Learn more in [Schedule tasks](/agents/api-reference/schedule-tasks/).
+
+## Routing enhancements
+
+### Custom URL paths with basePath
+
+Use `basePath` to connect clients to custom URL paths instead of the default `/agents/{agent}/{name}` pattern:
+
+<TypeScriptExample>
+
+```ts
+// Client connects to /user instead of /agents/user-agent/default
+const agent = useAgent({
+  agent: "UserAgent",
+  basePath: "user"
+});
+```
+
+</TypeScriptExample>
+
+### Server-sent identity
+
+When using `basePath`, agents automatically send their identity to clients on connection:
+
+<TypeScriptExample>
+
+```ts
+const agent = useAgent({
+  agent: "UserAgent",
+  basePath: "user",
+  onIdentity: (name, agentType) => {
+    console.log(`Connected to ${agentType} instance: ${name}`);
+  }
+});
+
+// Wait for identity before proceeding
+await agent.ready;
+console.log(agent.name); // Server-determined name
+```
+
+</TypeScriptExample>
+
+### Sub-paths with path option
+
+Append additional path segments to agent URLs:
+
+<TypeScriptExample>
+
+```ts
+// Connects to /user/settings
+useAgent({ agent: "UserAgent", basePath: "user", path: "settings" });
+
+// Standard routing: /agents/my-agent/room/settings
+useAgent({ agent: "MyAgent", name: "room", path: "settings" });
+```
+
+</TypeScriptExample>
+
+Learn more in [Agent routing patterns](/agents/concepts/routing/).
+
+## Callable method improvements
+
+### Client-side RPC timeout
+
+Set timeouts for callable method invocations:
+
+<TypeScriptExample>
+
+```ts
+try {
+  // Rejects if call does not complete in 5 seconds
+  await agent.call("slowMethod", [], { timeout: 5000 });
+} catch (error) {
+  console.error("Call timed out");
+}
+```
+
+</TypeScriptExample>
+
+### Streaming error handling
+
+Gracefully signal errors during streaming responses:
+
+<TypeScriptExample>
+
+```ts
+// Server-side
+@callable({ streaming: true })
+async processItems(stream: StreamingResponse, items: string[]) {
+  for (const item of items) {
+    try {
+      const result = await this.process(item);
+      stream.send(result);
+    } catch (e) {
+      stream.error(`Failed to process ${item}: ${e.message}`);
+      return;
+    }
+  }
+  stream.end();
+}
+
+// Client-side
+await agent.call("processItems", [items], {
+  stream: {
+    onChunk: (chunk) => handleChunk(chunk),
+    onError: (errorMessage) => console.error(errorMessage),
+    onDone: (result) => handleComplete(result)
+  }
+});
+```
+
+</TypeScriptExample>
+
+### Introspection API
+
+Get metadata about callable methods on an agent:
+
+<TypeScriptExample>
+
+```ts
+const methods = agent.getCallableMethods();
+// Map<string, CallableMetadata>
+
+for (const [name, meta] of methods) {
+  console.log(`${name}: ${meta.description || "(no description)"}`);
+  if (meta.streaming) console.log("  (streaming)");
+}
+```
+
+</TypeScriptExample>
+
+## MCP client improvements
+
+### Options-based addMcpServer API
+
+Cleaner API for adding MCP servers with options object:
+
+<TypeScriptExample>
+
+```ts
+// New options-based API
+await this.addMcpServer("github", "https://mcp.github.com/mcp", {
+  callbackHost: "https://my-worker.workers.dev",
+  transport: {
+    type: "streamable-http",
+    headers: {
+      Authorization: "Bearer token"
+    }
+  }
+});
+
+// Legacy positional parameters still supported
+await this.addMcpServer("github", "https://mcp.github.com/mcp", "https://my-worker.workers.dev");
+```
+
+</TypeScriptExample>
+
+Learn more in [MCP client](/agents/model-context-protocol/).
+
+## State management enhancements
+
+### Validation before persistence
+
+Override `validateStateChange()` to validate or reject state updates before they are persisted:
+
+<TypeScriptExample>
+
+```ts
+validateStateChange(nextState: GameState, source: Connection | "server") {
+  if (nextState.score < 0) {
+    throw new Error("score cannot be negative");
+  }
+}
+```
+
+</TypeScriptExample>
+
+The validation runs synchronously before persistence and broadcast. Throwing an error aborts the update.
+
+Learn more in [Store and sync state](/agents/api-reference/store-and-sync-state/).
